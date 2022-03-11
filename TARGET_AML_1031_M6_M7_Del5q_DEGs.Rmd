@@ -1,0 +1,611 @@
+---
+title: 'Differential Expression of M6s, M7s and Del5qs'
+author: "Jenny Smith"
+date: "May 30, 2018"
+output: html_document
+---
+
+#Set-up
+
+```{r setup}
+library(knitr)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),tidy=TRUE, fig.align='center', fig.width = 10, fig.height = 10)
+knitr::opts_knit$set(root.dir = file.path(PROJHOME,'2018.07.03_M6_M7_Del5q_DEGs/'))
+options(stringsAsFactors = FALSE)
+```
+
+
+```{r message = FALSE, warning=FALSE}
+library(stringr)
+library(magrittr)
+library(ggplot2)
+library(dplyr)
+library(tibble)
+library(tidyr)
+library(DeGSEA)
+getwd()
+```
+
+
+#Read in the Clinical Data
+
+```{r}
+# merged <- read.csv(file.path(REFS,"00_Old", "TARGET_AML_0531_1031_merged_CDEs_1.10.19.csv"), 
+#                    stringsAsFactors = FALSE)
+
+merged <- read.csv(file.path(CDE, "Merged/TARGET_AML_0531_1031_merged_CDEs_5.29.20.csv"), 
+                   na.strings = c("NA","N/A","#N/A", "^.$", "^$"))
+
+merged <- merged %>%
+  filter(!is.na(USI) & USI != "Unknown") %>% 
+  # filter(Patient.Eligable.For.Bio.Study == "Yes") %>%
+  set_rownames(.$USI)
+
+head(merged[,1:5])
+# dim(merged)  #2314  141
+```
+
+```{r}
+table(merged$M6_AML, useNA = 'always')
+```
+
+
+#Read in the expression data
+
+```{r}
+rbd.cts <- read.csv("~/RNA_seq_Analysis/0000.00.03_Expression_Matrices/TARGET_AML_0531_1031_Ribodepleted_RNAseq_dupGenesRemoved_FractionalCounts.csv", row.names = 1)
+
+#remove cell lines, MPN, flow sorted and replicate samples
+rbd.cts <- rbd.cts[,-grep("Kas|MV4|MPN|Sort|replicate", colnames(rbd.cts), ignore.case = TRUE)]
+
+#change to only USI for colnames
+colnames(rbd.cts) <- str_split_fixed(colnames(rbd.cts),  "\\.", 5)[,3]
+
+
+head(rbd.cts[,1:5])
+dim(rbd.cts) #1460 samples
+```
+
+
+cts <- read.csv("~/RNA_seq_Analysis/0000.00.03_Expression_Matrices/TARGET_AML_AAML1031_dupGenesRemoved_FractionalCounts.csv", 
+                stringsAsFactors = FALSE, row.names = 1)
+colnames(cts) <- str_split_fixed(colnames(cts), "\\.", n=3)[,1]
+head(cts[,1:5])
+
+
+#Gene Annotations
+
+```{r}
+ADCs <- read.csv(file.path(PROJHOME,"0000.00.02_Reference_GeneInfo/ADC_and_Targets_Database_v2_rmDuplicates_12.23.19.csv"))
+
+head(ADCs)
+```
+
+```{r}
+CARTs <- read.csv(file.path(PROJHOME,"0000.00.02_Reference_GeneInfo/CARTcell_and_Targets_Database_v1_rmDuplicates_12.23.19.csv"))
+
+head(CARTs)
+```
+
+```{r}
+tumor_suppressors <- read.delim(file.path(PROJHOME,"0000.00.02_Reference_GeneInfo/Human_TumorSuppressorGenes_bioinfo.uth.edu.txt"), 
+                sep="\t")
+
+head(tumor_suppressors)
+# dim(tumor_suppressors) #1217    8
+```
+
+
+#Define the Groups
+
+```{r}
+cols <- colnames(merged) %>% 
+  grep("^M6|^M7|^Del5", ., ignore.case = TRUE, value=TRUE)
+```
+
+```{r}
+sapply(merged[,cols], table)
+```
+
+
+
+#Differential Expression vs Other AML
+
+
+##Del5q
+
+```{r}
+del5q_genes <- read.delim("Chr5_q31_q33_genes_biomart_export.txt", sep="\t")
+
+head(del5q_genes)
+# dim(del5q_genes) #657   4
+```
+
+
+```{r}
+DEGs.del5q <- twoGroups_DEGs(expnData = rbd.cts, 
+                             clinData = merged, 
+                             col = "del5q", 
+                             ref = "No", 
+                             anno = TRUE)
+
+
+# saveRDS(DEGs.del5q, "TARGET_AML_RBD_Del5q_vs_OtherAML.RDS")
+```
+
+```{r}
+DEGs.del5q <- readRDS("Del5Q_RBD_batch1_batch2_included/TARGET_AML_RBD_Del5q_vs_OtherAML.RDS")
+
+# dim(DEGs.del5q$DE$DE)
+table(DEGs.del5q$phenovector) #13 positive patients
+```
+
+```{r}
+DEGs.del5q.df <- extract_DEGs(DEGs.del5q, geneLevel = TRUE, anno = TRUE)
+
+head(DEGs.del5q.df)
+# dim(DEGs.del5q.df) #445  14
+# write.csv(DEGs.del5q.df,"TARGET_AML_RBD_Del5q_vs_OtherAML_DEGs.csv", row.names = FALSE )
+```
+
+
+```{r}
+chr5_DEGs <- DEGs.del5q.df %>% 
+  inner_join(., del5q_genes, by=c("geneStableID"="Gene.stable.ID")) %>%
+  rowwise() %>%
+  mutate(Tumor_Suppressor_Gene=case_when(
+    gene %in% tumor_suppressors$GeneSymbol ~ "Yes",
+    TRUE ~ "")) %>%
+  ungroup()
+
+
+View(chr5_DEGs)
+head(chr5_DEGs)
+dim(chr5_DEGs)
+# write.csv(chr5_DEGs, "TARGET_AML_Del5q_vs_OtherAML_DEGs_onChr5q31q33.csv", row.names = FALSE)
+```
+
+
+```{r fig.height=7, fig.width=12}
+# tiff("TARGET_AML_RBD_Del5q_vs_OtherAML_Heatmap.tiff", res=300, units = "in", height = 7, width = 12)
+draw(DEGs.del5q$Heatmap)
+# dev.off()
+```
+
+```{r}
+DEGs.del5q.NBM <- twoGroups_DEGs(expnData = rbd.cts, 
+                             clinData = merged, 
+                             col = "del5q", 
+                             ref = "No", 
+                             BM = TRUE,
+                             anno = TRUE)
+
+table(DEGs.del5q.NBM$phenovector)
+# saveRDS(DEGs.del5q.NBM, "TARGET_AML_RBD_Del5q_vs_NBM.RDS")
+```
+
+```{r}
+DEGs.del5q.NBM <- readRDS("Del5Q_RBD_batch1_batch2_included/TARGET_AML_RBD_Del5q_vs_NBM.RDS")
+```
+
+
+```{r}
+DEGs.del5q.NBM.df <- extract_DEGs(DEGs.del5q.NBM, 
+                                 anno = TRUE, geneLevel = TRUE)
+
+head(DEGs.del5q.NBM.df)
+# dim(DEGs.del5q.NBM.df) #5088   11
+
+# write.csv(DEGs.del5q.NBM.df, "TARGET_AML_RBD_Del5q_vs_NBM_DEGs.csv", row.names = FALSE)
+```
+
+```{r fig.height=7, fig.width=12}
+# tiff("TARGET_AML_RBD_Del5q_vs_NBM_Heatmap.tiff", res=300, units = "in", height = 7, width = 12)
+draw(DEGs.del5q.NBM$Heatmap)
+# dev.off()
+```
+
+
+```{r}
+chr5_DEGs_NBM <- DEGs.del5q.NBM.df %>% 
+  inner_join(., del5q_genes, by=c("geneStableID"="Gene.stable.ID")) %>%
+  rowwise() %>%
+  mutate(Tumor_Suppressor_Gene=case_when(
+    gene %in% tumor_suppressors$GeneSymbol ~ "Yes",
+    TRUE ~ "")) %>%
+  ungroup() %>% 
+  left_join(., ADCs, by=c("gene"="Gene.symbol.of.ADC.target..Final.")) %>% 
+  left_join(., CARTs, by=c("gene"="Gene.symbol.of.CAR.T.cell.gene.target..Final."))
+
+
+# View(chr5_DEGs_NBM)
+# head(chr5_DEGs_NBM)
+dim(chr5_DEGs_NBM)
+# write.csv(chr5_DEGs_NBM, "TARGET_AML_Del5q_vs_NBM_DEGs_onChr5q31q33.csv", row.names = FALSE)
+```
+
+## All 3 Groups - from Batch 1 RBD (N=1049 AML)
+
+```{r message=FALSE}
+# pdf("TARGET_AML_1031_del5q_M6_M7_vs_OtherAMLs_Heatmaps.pdf")
+
+DEGs <- lapply(cols, twoGroups_DEGs, expnData=cts, clinData=merged,ref="No")
+names(DEGs) <- cols
+dev.off()
+
+# save(DEGs, file="TARGET_AML_1031_del5q_M6_M7_vs_OtherAMLs_withAnno.RData")
+DEGs <- get(load("TARGET_AML_1031_del5q_M6_M7_vs_OtherAMLs_withAnno.RData"))
+```
+
+```{r}
+summary(DEGs)
+```
+
+
+```{r}
+table(DEGs$M7_AML$phenovector) #52
+table(DEGs$M6_AML$phenovector) #11
+table(DEGs$del5q$phenovector) #10 - only 3 more in the 2nd batch of RBD RNAseq
+```
+
+```{r}
+DEGs.list <- lapply(DEGs, extract_DEGs, anno=TRUE,geneLevel=TRUE)
+
+lapply(DEGs.list, dim) #235 in Del5Q, 1,266 in M6, and 2,974 in M7s.
+# lapply(DEGs.list, head)
+
+
+# lapply(names(DEGs.list), function(x) write.csv(DEGs.list[[x]],paste0("TARGET_AML_1031_", x, "vs_otherAML_DEGs.csv")))
+
+```
+
+```{r}
+MDS <- lapply(DEGs, extract_MDS)
+```
+
+```{r fig.width=7, fig.height=5}
+M6.MDS.data <- merge(DEGs$M6_AML$MDS$scores, DEGs$M6_AML$phenovector, by=0)
+# head(M6.MDS.data)
+
+ggplot(data = M6.MDS.data, aes(x=MDS1,y=MDS2, color=y)) +
+  geom_point(alpha=0.7, size=2) + 
+  theme_classic()
+```
+
+```{r fig.width=7, fig.height=5}
+PCA <- lapply(DEGs, extract_PCA)
+```
+
+```{r fig.width=7, fig.height=5}
+ggplot(data=DEGs$M6_AML$PCA$pca_data, aes(x=PC1, y=PC2, color=group)) +
+  geom_point(alpha=0.6, size=3) + 
+  geom_point(data=filter(DEGs$M6_AML$PCA$pca_data, group=="GroupA"), aes(x=PC1, y=PC2, color=group), size=3) +
+  theme_classic() +
+  scale_color_manual(values=c("GroupA"="firebrick1","GroupB"="grey40"), 
+                     labels=c("GroupA"="M6","GroupB"="OtherAML"))
+```
+
+```{r}
+DEGs.list$M7_AML %>%
+  filter(grepl("CD56", gene, ignore.case = TRUE))
+```
+
+
+
+#Differential Expression vs NBM
+
+```{r message=FALSE}
+# pdf("TARGET_AML_1031_del5q_M6_M7_vs_NBM_Heatmaps.pdf")
+
+DEGs.NBM <- lapply(cols, twoGroups_DEGs, expnData=cts, clinData=merged,ref="No",BM=TRUE)
+names(DEGs.NBM) <- cols
+# dev.off()
+
+
+
+# save(DEGs.NBM,file="TARGET_AML_1031_del5q_M6_M7_vs_NBM_withAnno.RData")
+DEGs.NBM <- get(load("TARGET_AML_1031_del5q_M6_M7_vs_NBM_withAnno.RData"))
+```
+
+
+```{r}
+DEGs.NBM.list <- lapply(DEGs.NBM, extract_DEGs, anno=TRUE, geneLevel=TRUE)
+
+# lapply(DEGs.NBM.list, head)
+# lapply(DEGs.NBM.list, dim)
+# lapply(names(DEGs.NBM.list), function(x) write.csv(DEGs.list[[x]],paste0("TARGET_AML_1031_", x, "vs_NBM_DEGs.csv")))
+```
+
+
+```{r}
+PCA.NBM <- lapply(DEGs.NBM, extract_PCA)
+
+PCA.NBM
+```
+ 
+```{r fig.height=5, fig.width=8}
+MDS.NBM <- lapply(DEGs.NBM, extract_MDS)
+
+MDS.NBM
+```
+ 
+ 
+#Run GSEA on DE Results 
+
+See bottom for the code that that produced these results. Ran on Gizmos 
+
+```{r}
+load("TARGET_AML_hd.1031_Del5q_M6_M7_vs_otherAML_GAGE_GSA_expn_HSA.KEGG.RData")
+load("TARGET_AML_hd.1031_Del5q_M6_M7_vs_otherAML_GAGE_GSA_FC_C2.KEGG.RData")
+load("TARGET_AML_hd.1031_Del5q_M6_M7_vs_otherAML_GAGE_GSA_expn_C2.All.RData")
+load("TARGET_AML_hd.1031_Del5q_M6_M7_vs_otherAML_GAGE_GSA_expn_C2.KEGG.RData")
+```
+
+
+##Del5q Only 
+
+```{r}
+source("~/scripts/RNAseq_Analysis/DifferentialExpn_PathwayAnalysis/GAGE_GSEA_Function.r")
+```
+
+
+```{r}
+gage.del5q <- gage_from_pipeline(twoGroups_DEGs.res = DEGs.del5q, type = "expn", )
+```
+
+
+
+## M6 AML
+
+```{r}
+M6.HSA <- GSA.KEGG$M6_AML
+# write.csv(M6.HSA$SigPaths, "TARGET_AML_1031_M6_vs_OtherAML_HSA.KEGG_GAGE_GeneSetAnalysis.csv")
+```
+
+```{r}
+M6.C2.KEGG <- GSA$M6_AML
+# M6.C2.KEGG$SigPaths[,1:5] #nitrogen metabiolism
+```
+
+```{r}
+M6.C2.KEGG.FC <- GSA.FC$M6_AML #none
+M6.C2.KEGG.FC$SigPaths
+```
+
+```{r}
+M6.C2.All <- GSA.C2.All$M6_AML
+
+# write.csv(M6.C2.All$SigPaths, "TARGET_AML_1031_M6_vs_OtherAML_MSigDB_C2.All_GAGE_GeneSetAnalysis.csv", row.names = TRUE)
+```
+
+##M7 AML
+
+```{r}
+M7.HSA <- GSA.KEGG$M7_AML
+
+M7.HSA$SigPaths[1:10,1:5]
+# write.csv(M7.HSA$SigPaths, "TARGET_AML_1031_M7_vs_OtherAML_HSA.KEGG_GAGE_GeneSetAnalysis.csv")
+```
+
+
+```{r}
+M7.C2.KEGG <- GSA$M7_AML
+# paths.M7.C2.Kegg <- intersect(rownames(M7.C2.KEGG$SigPaths), M7.C2.KEGG$essSets$essentialSets)
+
+M7.C2.KEGG$SigPaths[1:10,1:5]
+# write.csv(M7.C2.KEGG$SigPaths, "TARGET_AML_1031_M7_vs_OtherAML_MSigDB_C2.KEGG_GAGE_GeneSetAnalysis.csv")
+```
+
+
+```{r}
+M7.C2.All <- GSA.C2.All$M7_AML
+
+M7.C2.All$SigPaths[1:10,1:5]
+
+# write.csv(M7.C2.All$SigPaths,"TARGET_AML_1031_M7_vs_OtherAML_MSigDB_C2.All_GAGE_GeneSetAnalysis.csv")
+```
+
+
+
+#Examine the clinical characterisitics
+
+```{r message=FALSE}
+library(compareGroups)
+```
+
+```{r}
+# colnames(merged)
+```
+
+```{r}
+NUP_Frequency <- merged %>%
+  dplyr::select(Protocol, Sex, Age.in.years, M6_AML,
+                FLT3.ITD.positive., NPM.mutation., CEBPA.mutation.,
+                Primary.Fusion.CNV, Additional.Fusions.CNV) %>%
+  mutate(NUP98.Fusions=case_when(
+    grepl("NUP98",Primary.Fusion.CNV) | grepl("NUP98", Additional.Fusions.CNV) ~ "Yes",
+    # grepl("NUP98-KDM5A|NUP98-NSD1|NUP98-SET",Primary.Fusion.CNV) | grepl("NUP98", Additional.Fusions.CNV) ~ "Yes",
+    is.na(Primary.Fusion.CNV) |  grepl("^$", Primary.Fusion.CNV) ~ "Unknown",
+    TRUE ~ "No")) %>%
+  filter(!grepl("CCG-2961|AAML03P1", Protocol),
+         M6_AML != "Unknown",
+         NUP98.Fusions != "Unknown") %>%
+  group_by(NUP98.Fusions,M6_AML) %>% #
+  summarise(N=n())%>% 
+  ungroup() %>% 
+  mutate(Percent=(N/sum(N))*100) %>%
+  ungroup()
+
+NUP_Frequency
+# table(NUP_Frequency$NUP98.Fusions, useNA = 'ifany')
+
+```
+
+```{r}
+dat.M6 <- merged %>%
+  dplyr::select(Protocol, Sex, Age.in.years, M6_AML,
+                FLT3.ITD.positive., NPM.mutation., CEBPA.mutation.,
+                Primary.Fusion.CNV) %>%  #Additional.Fusions.CNV are all NA/blank
+  mutate(NUP98.Fusions=ifelse(grepl("NUP98",Primary.Fusion.CNV),"Yes","No")) %>% 
+  filter(M6_AML != "Unknown", 
+         !grepl("CCG-2961|AAML03P1", Protocol)) 
+
+tab_fus <- table(filter(dat.M6, M6_AML == "Yes")$Primary.Fusion.CNV, useNA = "ifany")#8/27 have NUP98 fusions
+sum(tab_fus[grep("NUP98",names(tab_fus))])/sum(tab_fus)*100 
+```
+
+```{r warning=FALSE, message=FALSE}
+comp.M6 <- compareGroups(M6_AML ~ ., data = dat.M6, method=4, Q1=0, Q3=1)
+tab.M6 <- createTable(comp.M6)
+
+tab.M6
+```
+
+
+# Genes most associated w/ the phenotypes
+
+
+##M6
+
+```{r}
+M6.logCPM <- DEGs$M6_AML$DE$Voom$E[DEGs.list$M6_AML$gene,]
+dim(M6.logCPM) #19795   941
+# plotDensities(M6.logCPM)
+head(M6.logCPM[,1:5])
+```
+
+```{r}
+clinData <- merged[names(DEGs$M6_AML$phenovector), ]
+dim(clinData)
+head(clinData[,1:5])
+```
+
+```{r}
+pca.M6 <- prcomp(t(M6.logCPM), scale=T)
+```
+
+```{r}
+# plot(pca.M6)
+# biplot(pca.M6)
+```
+
+
+```{r}
+loadings <- as.data.frame(pca.M6$rotation) %>%
+  rownames_to_column("Gene") %>%
+  arrange(dplyr::desc(abs(PC1)))
+
+# dim(loadings) #1266  941
+head(loadings)
+
+top50 <- loadings$Gene[1:50]
+```
+
+
+```{r}
+Top50FC <- DEGs.list$M6_AML$gene[c(1:50)] #1217:1266
+```
+
+```{r}
+colorPal <- colorRampPalette(c("chartreuse1", "chartreuse2", "chartreuse3", "chartreuse4","black",
+                               "magenta4", "magenta3", "magenta2", "magenta1"))(n=299)
+
+# pdf(file = "TARGET_AML_M6_vs_OtherAMLs_Heatmap_from_DEGsSubset_PC1.pdf", height = 10, width = 10)
+heatmap.2(x=as.matrix(M6.logCPM[top50,]),
+          scale = "row", 
+          col = colorPal, 
+          trace = "none", 
+          ColSideColors =  cc, hclustfun = function(x) hclust(x,method = "ward.D2"))
+
+# dev.off()
+```
+
+
+```{r}
+scores <- as.data.frame(pca.M6$x) %>%
+  rownames_to_column("USI") %>%
+  left_join(., dplyr::select(clinData, USI, M6_AML), by="USI")
+
+head(scores)
+```
+
+
+```{r fig.height=3, fig.width=5}
+par(mfrow=c(2,1))
+
+ggplot(scores, aes(x=PC1,y=PC2, color=M6_AML)) + 
+  geom_point() + theme_bw()
+
+ggplot(scores, aes(x=PC1,y=PC3, color=M6_AML)) + 
+  geom_point() + theme_bw()
+
+ggplot(scores, aes(x=PC2,y=PC3, color=M6_AML)) + 
+  geom_point() + theme_bw()
+
+```
+
+
+#Gage Code
+
+Code below was submitted as an SBATCH job. See gage_M6_M7_Del5q.r
+
+setwd('/fh/fast/meshinchi_s/workingDir/TARGET/AML_TARGET/RNA/mRNAseq/analysis/2018.07.03_M6_M7_Del5q_DEGs/')
+source("~/scripts/RNAseq_Analysis/DifferentialExpn_PathwayAnalysis/GAGE_GSEA_Function.r")
+
+
+Del5q_M6_M7 <- get(load("TARGET_AML_1031_del5q_M6_M7_vs_OtherAMLs.RData"))
+filename <- "TARGET_AML_hd.1031_Del5q_M6_M7_vs_otherAML_GAGE_GSA"
+C2.KEGG <- readRDS("~/RNA_seq_Analysis/0000.00.01_GSEA_geneSets_gmt/c2.cp.kegg.v6.0.symbols.RDS")
+
+
+print("starting1")
+
+GSA <- lapply(Del5q_M6_M7, gage_from_pipeline, type="expn",geneset=C2.KEGG)
+  save(GSA,file=paste0(filename, "_expn_C2.KEGG.RData"))
+  rm(GSA)
+  gc()
+
+print("done1")
+
+print("starting2")
+
+GSA.FC <- lapply(Del5q_M6_M7, gage_from_pipeline, type="FC",geneset=C2.KEGG)
+  save(GSA.FC,file=paste0(filename, "_FC_C2.KEGG.RData"))
+  rm(GSA.FC)
+  gc()
+  
+  
+rm(C2.KEGG)  
+print("done2")
+
+print("starting3")
+
+
+C2.All <- readRDS("~/RNA_seq_Analysis/0000.00.01_GSEA_geneSets_gmt/c2.all.v6.0.symbols.RDS")
+
+GSA.C2.All <- lapply(Del5q_M6_M7, gage_from_pipeline, type="expn",geneset=C2.All)
+save(GSA.C2.All,file=paste0(filename, "_expn_C2.All.RData"))
+rm(GSA.C2.All)
+gc()
+
+rm(GSA.C2.All)
+print("done3")
+
+
+print("starting4")
+
+GSA.KEGG <- lapply(Del5q_M6_M7, gage_from_pipeline, type="expn",geneset=NULL) 
+  save(GSA.KEGG,file=paste0(filename, "_expn_HSA.KEGG.RData"))
+  rm(GSA.KEGG)
+  gc() 
+
+print("done4")
+
+
+
+#Session Information 
+
+```{r}
+sessionInfo()
+```
+

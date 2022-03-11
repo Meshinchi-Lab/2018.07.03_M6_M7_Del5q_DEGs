@@ -1,0 +1,755 @@
+---
+title: "M7 AML Oncoprint"
+author: "Jenny Smith"
+date: "1/5/20"
+output: html_document
+---
+
+# Set-up 
+
+```{r setup}
+library(knitr)
+knitr::opts_knit$set(root.dir = file.path(PROJHOME,"2018.07.03_M6_M7_Del5q_DEGs/"))
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),tidy=TRUE, 
+                      fig.align='center', fig.width = 10, fig.height = 10)
+options(stringsAsFactors = FALSE,bitmapType = 'cairo', device='x11')
+# grDevices::X11.options(type='cairo')
+table = function (..., useNA = 'ifany') base::table(..., useNA = useNA)
+```
+
+```{r message = FALSE, warning=FALSE}
+library(stringr)
+library(magrittr)
+library(ggplot2)
+
+library(gridExtra)
+library(RColorBrewer)
+
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(readr)
+
+library(DeGSEA)
+getwd()
+```
+
+
+# Requests
+
+Karen, wonderful manuscript.  Please see my edits.
+A few thoughts.  I’m assuming that you are aiming for a full manuscript rather than a brief report, which in that case we have a bunch of room to add.
+I thin we should add a couple of oncoprints to demonstrate overlaps.  Jenny/Rhonda, can we generate an oncoprint divided by the fusion groups on top for all the mutations to see if any mutations are enriched in this cohort?
+Jenny, we should look at our unsupervised clustering to see if NUP98 fusions segregate with AMkLs or with other NUP98 fusions.
+Can we look at the outcome for only NUP98/KDM5A to see if they have any different outcome by themselves?  
+We need Relapse risk from CR- Todd Alonzo .
+
+____________________
+
+Karen, you made some remarkable observations that can significantly expand the scope and significance of this manuscript.  
+The fact that 100% of patients with NUP98/KDM5A in the FAB M7 group have a chromosome 13 alteration compared to other M7 vs. NUP98/KDM5A in non M7 group is noteworthy.  We should see if we can explore significance of this. 
+ 
+In addition, I think we have fusion data for some of the patients in the MRC group without fusion in your file that may re-categorize some.  Jenny will pull the data.
+In addition, we will pull mutation data to include to see if there are mutations that can help.
+ 
+A few figures including a pie chart for the make up of the M7 patients and bar graphs comparing some of these variants within M7 vs. other will also enrich the manuscript.  I’m having Jenny pull as much data as possible.  Did Todd/Rob provide comparison of characteristics between M7 and non M7 patients?  
+Also, it would be important for us to try to determine why outcome for the NUP98/KDM5A patients is better than previously published and especially since that it is included as a high risk cohort in the next trial.  This will include other cooperating events, SCT, etc.  We will see if those with NUP98-KDM5A with and without M7 have different outcome. This may be important.
+
+#ClinData
+
+
+```{r}
+merged <- read.csv(file.path(CDE,"Merged/00_Old/TARGET_AML_0531_1031_merged_CDEs_05.01.21.csv")) %>% 
+    mutate(Reg.=as.character(Reg.)) %>% 
+    mutate(Any_chr13_Abnormality=case_when(
+                  !is.na(deletion_chr13) | !is.na(monosomy_trisomy_13) | !is.na(translocation_13) ~ "chr13_Abnormality", 
+                  ISCN=="Unknown" ~ "Unknown",
+                  TRUE ~ "None"), 
+         Any_chr13_Deletion=case_when(
+           !is.na(deletion_chr13) ~ "chr13_deletion",
+           ISCN=="Unknown" ~ "Unknown",
+           TRUE ~ "None"),
+         Any_chr13_CNV=case_when(
+           !is.na(deletion_chr13) | !is.na(monosomy_trisomy_13) ~ "chr13_CNV",
+           ISCN=="Unknown" ~ "Unknown",
+           TRUE ~ "None")) %>% 
+    select(Reg.:Eligibility_Comments, matches("chr13"), everything())
+
+
+dim(merged) #3615  158
+table(merged$Eligibility_Comments)
+```
+
+```{r}
+#original data provided to Karen Chisolm 
+orig_1031 <- openxlsx::read.xlsx("M7_K.Chisholm/Original_Data/1031 M6_M7.xlsx", sheet=1) %>% 
+  mutate(Reg.=as.character(Patient.registration.number))
+
+head(orig_1031)
+# dim(orig_1031)
+# table(orig_1031$Reg. %in% merged$Reg.) #84 (100%) TRUE
+```
+
+```{r}
+orig_0531 <-  openxlsx::read.xlsx("M7_K.Chisholm/Original_Data/1031 M6_M7.xlsx", sheet=2)
+
+head(orig_0531)
+# table(orig_0531$TARGET.USI.1 %in% merged$USI) #TRUE 60
+```
+
+```{r}
+inelig <- merged %>% 
+  filter(Eligibility_Comments=="remove") %>% 
+  pull(Reg.)
+
+length(inelig)
+```
+
+```{r}
+Cohort_Mutations <- openxlsx::read.xlsx("References/Fusions_mutations_in_pediatric_AML.xlsx", sheet = 4)
+# Cohort_Mutations <- get(load("References/TARGET_Fusion_Mutation_Oncoprint_Matrices.RData"))$Oncoprint_matrix
+# Cohort_Mutations <- apply(Cohort_Mutations,2, function(x) gsub("\\/", ";", x))
+
+
+dim(Cohort_Mutations) #2262   17
+head(Cohort_Mutations)
+
+# length(unique(Cohort_Mutations$patientID)) #800
+```
+
+```{r}
+St.Jude_Mutations <- openxlsx::read.xlsx("References/stjude_analysis_for_protein_paint.xlsx", sheet = 2)
+
+head(St.Jude_Mutations)
+dim(St.Jude_Mutations)
+# length(unique(St.Jude_Mutations$TARGET_CASE_ID)) #196
+```
+
+
+
+
+
+#Define Samples
+
+```{r}
+manuscript_cohort <- openxlsx::read.xlsx("M7_K.Chisholm/Drafts/Supplemental_Table_1_v2_5.03.21.xlsx", check.names=FALSE, sep.names=".") %>% 
+   mutate(Reg.=as.character(Reg.)) %>% 
+  filter(!grepl("Maybe not M7", TARGET.USI.1)) %>% 
+  mutate(USI=gsub("^.+/ ([A-Z]+)", "\\1", TARGET.USI.1)) %>%
+
+  #re-order the columns
+  select(USI, everything())
+
+head(manuscript_cohort)
+dim(manuscript_cohort)
+# View(manuscript_cohort)
+
+# length(unique(manuscript_cohort$TARGET.USI.1))
+# table(manuscript_cohort$Ineligible) #8 ineligables
+# View(manuscript_cohort)
+
+
+suppTable <- manuscript_cohort %>% 
+  #Fix the column names
+  mutate_at(vars(Additional.Fusions.CNV), ~gsub("Unknown", "", .)) %>%
+  rename_at(vars(Protocol:GlycoA), ~gsub("\\.|_", " ", .)) %>%
+  rename_at(vars(`Trisomy 3`:`Trisomy 21`), ~str_to_title(.)) %>%
+  rename_all(~gsub("FLT3 ITD", "FLT3-ITD", .)) %>%
+  rename_all(~gsub("Fusions CNV", "Fusions/CNV", .)) %>%
+  rename_all(~gsub(" $", "", .)) %>% 
+  select(-matches("USI", ignore.case = FALSE))
+ 
+head(suppTable)
+View(suppTable)
+
+
+# openxlsx::write.xlsx(suppTable, "M7_K.Chisholm/Supplemental_Table_1_v2_JSEdits_5.03.21.xlsx",keepNA=FALSE,row.names=FALSE)
+```
+
+```{r}
+# Why aren't these identical? CDEs need updating and some AAML1031 are not in Karen's cohort
+AMKL <- merged %>% 
+  filter(M7_AML == "Yes") 
+
+dim(AMKL) #117
+# head(AMKL[,1:5])
+table(AMKL$Eligibility)
+table(AMKL$Eligibility_Comments)
+```
+
+```{r}
+table(manuscript_cohort$Reg. %in% AMKL$Reg.) #100 samples included, 8 missing
+table(manuscript_cohort$TARGET.USI.1 %in% AMKL$USI) #87 USIs included
+
+# setdiff(manuscript_cohort$Reg., AMKL$Reg.)
+# setdiff(merged$Reg., manuscript_cohort$Reg.)
+
+# table(manuscript_cohort$TARGET.USI.1 %in% Cohort_Mutations$patientID) #31 samples included
+# table(manuscript_cohort$TARGET.USI.1 %in% unique(St.Jude_Mutations$TARGET_CASE_ID)) #12 samples included
+```
+
+
+# Identify Mismatched Patients
+
+```{r eval=FALSE}
+manuscript_cohort <- openxlsx::read.xlsx("M7_K.Chisholm/Drafts/Supplemental_Table_1_Rhonda_Edits.xlsx") %>% 
+  mutate(Reg.=as.character(Reg.)) %>% 
+  mutate(Ineligible=ifelse(Reg. %in% inelig, "remove", "OK")) 
+
+merged %>% 
+  filter(grepl("0531|1031", Protocol)) %>% 
+  group_by(Protocol, M7_AML) %>% 
+  count()
+
+#69 AMKL in 1031 and 64 Unknowns
+```
+
+```{r}
+subset_0531 <- merged %>% 
+  filter(grepl("0531", Protocol)) %>% 
+  select(Reg.,USI, FAB_or_WHO.Classification, M7_AML)
+
+
+# View(subset_1031)
+# table(subset_0531$M7_AML)
+# sum(grepl("M7", subset_0531$FAB_or_WHO.Classification)) #41
+# table(subset_0531$Reg. %in% manuscript_cohort$Reg.) 
+```
+
+```{r}
+manuscript_cohort_0531 <- manuscript_cohort %>% 
+  filter(grepl("0531", Protocol)) %>% 
+  select(Reg.,USI=TARGET.USI.1,Protocol,  `2016.WHO.Classification`,  Abnormal.Megakaryocytes)
+
+# dim(manuscript_cohort_0531)
+# table(manuscript_cohort_0531$USI %in% orig_0531$TARGET.USI.1) #7 not in the original dataset. 
+# table(manuscript_cohort_0531$USI %in% subset_0531$USI) #7 not in the Merged dataset
+```
+
+```{r}
+#There are from the Karen Chisolms work in 2010/2011 COG Pathalogy group (w/ Samir) and was found that they are M7
+#These were simply not included in the TARGET dataset, and will need to be merged into the CDEs on our end. 
+manuscript_cohort_0531.Odd <- manuscript_cohort %>% 
+  filter(!grepl("1031", Protocol)) %>% 
+  filter(!TARGET.USI.1 %in% orig_0531$TARGET.USI.1 |
+           !TARGET.USI.1 %in% subset_0531$USI)
+
+
+# manuscript_cohort_0531.Odd
+```
+
+```{r}
+#The changed classifications from COG released in 2018 to COG released in 2019
+# merged %>% 
+#   filter(USI=="PAWJGF")
+```
+
+```{r}
+missing <-  merged %>% 
+  mutate_at(vars(M7_AML),~case_when(
+    M7_AML != "Yes" & Reg. %in% manuscript_cohort$Reg. ~ "Yes",
+    TRUE ~ .)) %>% 
+  mutate(Keep=case_when(
+    M7_AML == "Yes" & !Reg. %in% manuscript_cohort$Reg. ~ FALSE,
+    TRUE ~ TRUE )) %>%  
+  filter(!Keep, M7_AML=="Yes") %>% 
+  select(Reg.:Eligibility_Comments, 
+         matches("FAB|Primary.Fusion|Primary.CNV|Additional.Fusions.CNV"),
+         ISCN) %>% 
+  arrange(Protocol, Eligibility)
+
+
+# missing
+# write.csv(missing, "TARGET_AML_AMKL_Additional_Patients.csv", row.names = FALSE)
+# table(outcome_df$Keep) #There are 17 AMKL patients that are NOT in Karen's manuscri
+```
+
+```{r}
+# table(manuscript_cohort$Reg. %in% merged$Reg.)
+filter(merged, Reg. %in% manuscript_cohort$Reg.) %>% 
+  select(FLT3.ITD.positive., FLT3.ITD.allelic.ratio)
+```
+
+
+# Update the Manuscript Cohort
+
+```{r}
+#these lacked USIs before
+# manuscript_cohort %>% 
+#   filter(!TARGET.USI.1 %in% AMKL$USI)
+# 
+# colnames(manuscript_cohort)
+```
+
+```{r eval=FALSE}
+manuscript_cohort <- openxlsx::read.xlsx("M7_K.Chisholm/Drafts/Supplemental_Table_1_Rhonda_Edits.xlsx") %>% 
+  mutate(Reg.=as.character(Reg.)) %>% 
+  mutate(Ineligible=ifelse(Reg. %in% inelig, "remove", "OK")) 
+
+cols_to_update <- c("Reg.", "USI",
+                    "Eligibility","Eligibility_Comments","FAB_or_WHO.Classification",
+                    "ISCN","Protocol","Sex","Age.in.years","Age.in.days","Primary.Fusion","Additional.Fusions.CNV",
+                    "NPM.mutation.","CEBPA.mutation.","RAM.phenotype",
+                    "Any_chr13_Abnormality",
+                    "deletion_chr13","monosomy_trisomy_13", "translocation_13")
+
+
+cols_to_keep <- manuscript_cohort %>% 
+  select("Reg.",USI_Original=TARGET.USI.1, matches("Genes.with.mutation|2016|Classif|Fibrosis|Abnormal.Megakaryocytes|Multilineage|Normal.karyotype"),
+         Trisomy.3:`Del(9q)`, Trisomy.19:Complex.karyotype,
+         CD61:GlycoA) %>% 
+  colnames(.)
+
+# cols_to_keep
+
+manuscript_cohort.orphans <- manuscript_cohort %>% 
+  filter(!Reg. %in% merged$Reg.) %>% 
+  rename_at(vars(TARGET.USI.1, Fusion.genes, `Add'l.Fusions`),
+            ~c("USI_Original", "Primary.Fusion","Additional.Fusions.CNV")) %>% 
+  select(-Primary.Fusions,-`Monosomy.13./.del(13q)`)
+
+
+manuscript_cohort.update <- manuscript_cohort %>% 
+  filter(Reg. %in% merged$Reg.) %>% 
+  select(USI_Original=TARGET.USI.1, Ineligible, one_of(cols_to_keep)) %>% 
+  left_join(., select(merged, all_of(cols_to_update)) %>% 
+                rename_at(vars(Age.in.days, Age.in.years, Sex, translocation_13),
+                          ~c("Age.at.Diagnosis.in.Days", "Age.at.Diagnosis.in.years", "Gender","translocation_13")), 
+            by="Reg.") %>% 
+  bind_rows(manuscript_cohort.orphans) %>% 
+  select(Reg., USI,USI_Original,
+         Ineligible,
+         Eligibility,Eligibility_Comments,
+         Protocol:Age.at.Diagnosis.in.Days,
+         RAM.phenotype,FAB_or_WHO.Classification,
+         NPM.mutation.:CEBPA.mutation.,
+         ISCN,Any_chr13_Abnormality,
+         deletion_chr13:translocation_13,
+         Complex.karyotype,
+         matches("Genes"),
+         matches("Primary.Fusion|Additional"), everything()) %>%
+
+  mutate_at(vars("2016.WHO.Classification","Classification.for.statistics"), ~case_when(
+    grepl("NUP98", .) & !grepl("NUP98", Primary.Fusion) ~ "Needs Updating",
+    TRUE ~ .)) %>% 
+  # mutate_at(vars(USI), ~case_when(
+  #   is.na(USI) ~ USI_Original,
+  #   grepl("Unknown", USI) ~ USI_Original,
+  #   TRUE ~ .)) %>%
+  mutate_at(vars(Protocol:Gender,RAM.phenotype:Any_chr13_Abnormality,
+                 Primary.Fusion:Additional.Fusions.CNV),
+            ~ifelse(is.na(.), "Unknown", .)) %>% 
+  mutate_at(vars(deletion_chr13:translocation_13), ~case_when(
+    is.na(.) & !grepl("Unknown", ISCN) ~ "None",
+    is.na(.) & c(ISCN == "Unknown") ~ "Unknown",
+    TRUE ~ .)) %>% 
+
+  arrange(desc(USI))
+
+
+
+# head(manuscript_cohort.update)
+# tail(manuscript_cohort.update, n=8)
+dim(manuscript_cohort.update) #108
+
+# View(manuscript_cohort.update)
+# openxlsx::write.xlsx(as.data.frame(manuscript_cohort.update), "AMKL_Chisholm_K_Supplemental_Table_1_Rhonda_Edits_JSEdits.xlsx")
+# write.csv(as.data.frame(manuscript_cohort.update), "AMKL_Chisholm_K_Supplemental_Table_1_Rhonda_Edits_JSEdits_04.29.21.csv", row.names = FALSE)
+
+
+
+addl_cols <- setdiff(colnames(merged), colnames(manuscript_cohort.update))
+
+manuscript_cohort.update <- manuscript_cohort.update %>%
+  left_join(.,select(merged, Reg., all_of(addl_cols)),
+            by="Reg.")
+
+head(manuscript_cohort.update)
+dim(manuscript_cohort.update) #108 195
+# write.csv(manuscript_cohort.update, "TARGET_AMKL_Chisholm_K_Cohort_Full_CDEs_04.29.21.csv", row.names = FALSE)
+
+# table(manuscript_cohort.update$Protocol)
+```
+
+```{r}
+reference_chr13 <- merged %>% 
+  filter(!USI %in% manuscript_cohort.update$USI, 
+         !M7_AML == "Yes") %>% 
+  filter(grepl("0531|1031",Protocol)) %>% 
+  bind_rows(mutate(manuscript_cohort.update,AMKL_Cohort="AMKL"),.) %>% 
+  mutate(AMKL_Cohort=ifelse(is.na(AMKL_Cohort), "OtherAML", AMKL_Cohort)) %>% 
+  select(USI, AMKL_Cohort, Protocol, ISCN, matches("chr13|_13")) %>% 
+  arrange(AMKL_Cohort, Protocol,Any_chr13_Abnormality) 
+
+
+
+head(reference_chr13)
+dim(reference_chr13) #1847    7
+table(reference_chr13$AMKL_Cohort,
+      reference_chr13$Any_chr13_Abnormality)
+
+# write.csv(reference_chr13, "TARGET_AML_chr13_alterations_AMKLvsOtherAML_forKarenChisholm_Manuscript.csv", row.names = FALSE)
+```
+
+```{r}
+# manuscript_cohort.update %>% 
+#   filter(deletion_chr13=="Unknown")
+# table(manuscript_cohort.update$deletion_chr13)
+# table(manuscript_cohort.update$Any_chr13_Abnormality)
+# table(manuscript_cohort.update$Eligibility)
+
+
+# manuscript_cohort.update %>%
+#   select(1:5,Protocol, FAB_or_WHO.Classification,matches("2016")) %>%
+#   arrange(Eligibility)
+  # write.csv(., "TARGET_AML_AMKL_Discrepancies_04.29.21.csv", row.names = FALSE)
+```
+
+## Double Check 2 KMT2As
+
+```{r}
+USIs <- c("PASGML","PARMPM")
+```
+
+
+```{r}
+merged %>% 
+  filter(USI %in% USIs) %>% 
+  select(USI, Was.sample.sent.for.RBD.sequencing,
+         matches("Primary.Fusion|Additional|Cyto.vs."), 
+         ISCN, matches("FISH"),matches("MLL"), 
+         Primary.Cytogenetic.Code)
+```
+
+# Outcome
+
+```{r}
+outcome_df <- merged %>% 
+  mutate_at(vars(M7_AML),~case_when(
+    M7_AML != "Yes" & Reg. %in% manuscript_cohort$Reg. ~ "Yes",
+    TRUE ~ .)) %>% 
+  mutate(Keep=case_when(
+    M7_AML == "Yes" & !Reg. %in% manuscript_cohort$Reg. ~ FALSE,
+    TRUE ~ TRUE )) 
+
+
+# I have outcome data from 101 patients out of 108 
+# outcome_df %>%
+#   filter(Keep) %>% 
+#   mutate(hasEFS=!is.na(EFS.time..days.)) %>%
+#   group_by(M7_AML,hasEFS) %>%
+#   count()
+s
+outcome_df <- outcome_df %>% 
+  filter(Keep)
+
+
+# table(outcome_df$M7_AML)
+```
+
+
+```{r fig.height=7, fig.width=15}
+# source(file.path(SCRIPTS,"RNAseq_Analysis/DifferentialExpn_PathwayAnalysis/R/Survplot_Functions_2018.10.24.r"))
+df.KDM5A_M7_nonM7 <- outcome_df %>% 
+  mutate(KDM5A_M7_nonM7=case_when(
+    M7_AML == "Yes" & Primary.Fusion == "NUP98-KDM5A" ~ "M7/NUP98-KDM5A",
+    M7_AML == "Yes" & Primary.Fusion != "NUP98-KDM5A" ~ "M7/otherAML",
+    M7_AML == "No" & Primary.Fusion == "NUP98-KDM5A" ~ "nonM7/NUP98-KDM5A",
+    M7_AML == "No" & Primary.Fusion != "NUP98-KDM5A" ~ "nonM7/otherAML")) %>% 
+  filter(!is.na(KDM5A_M7_nonM7))
+
+KDM5A_M7_nonM7 <- KM.plots(df = df.KDM5A_M7_nonM7, 
+                           group_vars = NULL, 
+                           type = "OS", 
+                           covariate = "KDM5A_M7_nonM7", 
+                           cc = c("M7/NUP98-KDM5A"="magenta",
+                                  "nonM7/NUP98-KDM5A"="hotpink4",
+                                  "M7/otherAML"="blue2",
+                                  "nonM7/otherAML"="navy"),
+                           cohort = "1031",
+                           riskTable = TRUE)
+
+
+
+# pdf("TARGET_AML_AMKL_NUP98-KDM5A_KaplanMeier.pdf", height = 7, width = 15)
+grid.arrange(grobs=c(KDM5A_M7_nonM7$OS,KDM5A_M7_nonM7$EFS), ncol=2)
+# dev.off()
+
+# table(df.KDM5A_M7_nonM7$KDM5A_M7_nonM7)
+table(df.KDM5A_M7_nonM7$KDM5A_M7_nonM7, df.KDM5A_M7_nonM7$SCT.in.1st.CR)
+```
+
+
+# Oncoprint 
+
+## Oncoprint Prepare Data 
+
+```{r}
+dat <- manuscript_cohort %>% 
+  mutate(AMKL="Yes") %>% 
+  select(Reg.,
+         AMKL,
+         Age.at.Diagnosis.in.years,
+         FLT3.ITD.positive.,
+         WT1.mutation.,
+         CEBPA.mutation.,
+         NPM.mutation.,
+         
+         Primary.Fusion,
+         Additional.Fusions.CNV,
+         
+         `Monosomy.7./.del(7q)`,
+         `Del(5q)/monosomy.5`,
+         Trisomy.3,
+         Trisomy.6,
+         Trisomy.8,
+         Trisomy.21,
+         Any_chr13_Abnormality) %>%
+  
+  
+  #Define updated columns 
+  mutate(
+         #Fusions
+         KMT2Ar=ifelse(grepl("KMT2A",`Primary.Fusion`) | grepl("KMT2A",`Additional.Fusions.CNV`), "Yes","No"),
+         RUNX1.RUNX1T1=ifelse(grepl("RUNX1-RUNX1T1",`Primary.Fusion`) | grepl("RUNX1-RUNX1T1",`Additional.Fusions.CNV`), "Yes","No"),
+         CBFB.MYH11=ifelse(grepl("CBFB-MYH11",`Primary.Fusion`)| grepl("CBFB-MYH11",`Additional.Fusions.CNV`), "Yes","No"),
+         NUP98r=ifelse(grepl("NUP98",`Primary.Fusion`)| grepl("NUP98",`Additional.Fusions.CNV`), "Yes","No"),
+         CBFA2T3.GLIS2=ifelse(grepl("CBFA2T3-GLIS2",`Primary.Fusion`) | grepl("CBFA2T3-GLIS2",`Additional.Fusions.CNV`), "Yes","No"),
+         RBM15.MKL1=ifelse(grepl("RBM15-MKL1",`Primary.Fusion`) | grepl("RBM15-MKL1",`Additional.Fusions.CNV`), "Yes","No"),
+         MECOM=ifelse(grepl("MECOM",`Primary.Fusion`) | grepl("MECOM",`Additional.Fusions.CNV`), "Yes","No"),
+         FUS.ERG=ifelse(grepl("FUS-ERG",`Primary.Fusion`) | grepl("FUS-ERG",`Additional.Fusions.CNV`), "Yes","No"),
+         TEC.MLLT10=ifelse(grepl("TEC-MLLT10",`Primary.Fusion`) | grepl("TEC-MLLT10",`Additional.Fusions.CNV`), "Yes","No")) %>% 
+  
+  #CNVs
+  mutate(`Monosomy7/del7q`=ifelse(grepl("del|mono",`Monosomy.7./.del(7q)`), "Yes","No"),
+         `Monosomy5/del5q`=ifelse(grepl("del|mono",`Del(5q)/monosomy.5`), "Yes","No"),
+         Trisomy3=ifelse(`Trisomy.3` == "Yes", "Yes","No"),
+         Trisomy6=ifelse(`Trisomy.6`=="Yes","Yes", "No"),
+         Trisomy8=ifelse(`Trisomy.8`=="Yes","Yes", "No"),
+         Trisomy21=ifelse(`Trisomy.21`=="Yes","Yes", "No"),
+         Abn13=ifelse( `Any_chr13_Abnormality` == "chr13_Abnormality", "Yes", "No" )) %>% 
+
+  #Clean up the mutation columns   
+  mutate(
+    # c.Kit.Mutation=case_when(
+    # grepl("Yes", c.Kit.Mutation.Exon.8) | grepl("Yes", c.Kit.Mutation.Exon.17) ~ "Yes",
+    # grepl("Unknown", c.Kit.Mutation.Exon.8) | 
+    #       grepl("Unknown", c.Kit.Mutation.Exon.17) ~ "Unknown",
+    # TRUE ~ "No"),
+    Age.Category=factor(case_when(
+      Age.at.Diagnosis.in.years < 3 ~ "Less than 3 years",
+      Age.at.Diagnosis.in.years >= 3 & Age.at.Diagnosis.in.years < 12 ~ "Between 3 and 12 years",
+      Age.at.Diagnosis.in.years >= 12 ~ "Greater than 12 years",
+    TRUE ~ "Unknown"), levels=c("Less than 3 years","Between 3 and 12 years",
+                                "Greater than 12 years","Unknown"))) %>% 
+  # mutate_at(vars(FLT3.ITD.positive.), ~case_when(
+  #   grepl("<0.1", .) ~ "No",
+  #   TRUE ~ .)) %>% 
+  # mutate_at(vars(RAS.Mutation), ~case_when(
+  #   .=="None" ~ "No",
+  #   !is.na(.) ~ "Yes")) %>%
+  # mutate_at(vars(CBL.Mutation), ~case_when(
+  #   .=="No" ~ .,
+  #   grepl("Del_", .) ~ "Yes"))  %>%
+  # mutate_at(vars(FLT3.ITD.positive.:CBL.Mutation),
+  #           ~ifelse(is.na(.), "Unknown", .))  %>% 
+
+  #change unknown to No only for sorting purposes
+  mutate_all(~gsub("Unknown", "No", .)) %>% 
+  arrange(desc(RBM15.MKL1),
+          desc(CBFA2T3.GLIS2),
+          desc(NUP98r),
+          desc(KMT2Ar),
+          desc(TEC.MLLT10),
+          desc(MECOM),
+          desc(FUS.ERG),
+          desc(Abn13),
+          desc(Trisomy.6), 
+          desc(Trisomy.3),
+          desc(`Monosomy7/del7q`),
+          desc(`Monosomy5/del5q`),
+          desc(WT1.mutation.)) %>%
+  select(Reg.,
+         AMKL, 
+         `Age Category`=Age.Category,
+         `Monosomy7/del7q`:Abn13,
+         FLT3.ITD.positive.:NPM.mutation.,
+         KMT2Ar:TEC.MLLT10)
+  
+
+head(dat)
+dim(dat) #107  22
+
+# View(dat)
+```
+
+
+## Oncoprint Format Mutations
+
+```{r}
+binarize <-  function(mat, CDEs, Colnames){
+  for(i in 1:nrow(mat)){
+    gene <- rownames(mat)[i]
+    col <- Colnames[i]
+    binarized <- sapply(CDEs[[col]], function(g)  ifelse(g=="Yes",1,0))
+    mat[gene,] <- binarized
+  }
+  return(mat)
+}
+```
+
+```{r}
+genes <- c("KMT2Ar","NUP98r", "RUNX1.RUNX1T1","CBFB.MYH11","CBFA2T3.GLIS2","RBM15.MKL1","MECOM","FUS.ERG","TEC.MLLT10",
+           "Trisomy3","Monosomy5/del5q", "Trisomy6","Monosomy7/del7q", "Abn13", #"Trisomy8", "Trisomy21",
+           "FLT3-ITD","WT1","NPM1","CEBPA") 
+
+
+names(genes) <- c("KMT2Ar","NUP98r", "RUNX1.RUNX1T1","CBFB.MYH11","CBFA2T3.GLIS2","RBM15.MKL1","MECOM","FUS.ERG","TEC.MLLT10",
+                  "Trisomy3","Monosomy5/del5q", "Trisomy6","Monosomy7/del7q", "Abn13", # "Trisomy8","Trisomy21",
+                  "FLT3.ITD.positive.", "WT1.mutation.", "NPM.mutation.", "CEBPA.mutation.") #"RAS.Mutation",
+
+# genes
+length(genes) #18 rows
+# sapply(dat[,names(genes)], table, useNA='ifany')
+dimnames=list(genes,dat$Reg)
+
+
+alter_list <- list(fusion=matrix(ncol=nrow(dat),nrow=length(genes), 
+                                   dimnames = dimnames),
+                   cytogenetics=matrix(ncol=nrow(dat),nrow=length(genes),
+                                        dimnames=dimnames),
+                   mutation=matrix(ncol=nrow(dat),nrow=length(genes), 
+                                   dimnames = dimnames))
+
+
+# lapply(alter_list, function(x) head(x[,1:5], n=17))
+# lapply(alter_list, dim)
+```
+
+```{r}
+types <- list(fusion=c("KMT2Ar","NUP98r", "RUNX1.RUNX1T1","CBFB.MYH11","CBFA2T3.GLIS2","RBM15.MKL1","MECOM","FUS.ERG","TEC.MLLT10"),
+              cytogenetics=c("Trisomy3","Monosomy5/del5q", "Trisomy6","Monosomy7/del7q","Abn13"), # "Trisomy8", "Trisomy21"
+              mutations=c("FLT3-ITD","WT1","NPM1","CEBPA"))
+
+
+n <- length(genes)
+alter_list$fusion <- binarize(mat = alter_list$fusion, CDEs=dat, Colnames=names(genes))
+alter_list$fusion[c(types$cytogenetics, types$mutations),] <- 0
+
+
+alter_list$cytogenetics <- binarize(mat = alter_list$cytogenetics, CDEs=dat, Colnames=names(genes))
+alter_list$cytogenetics[c(types$fusion,types$mutations) ,] <- 0
+
+
+alter_list$mutation <- binarize(mat = alter_list$mutation, CDEs=dat, Colnames=names(genes))
+alter_list$mutation[c(types$fusion, types$cytogenetics),] <- 0
+```
+
+
+
+## Make the Oncoprint
+
+```{r}
+suppressPackageStartupMessages(library(ComplexHeatmap))
+```
+
+
+```{r}
+colorBars <-list("AMKL"=c("Yes"="slateblue4"),
+            "Age Category"=c("Less than 3 years"=brewer.pal(4,"Blues")[1],
+                        "Between 3 and 12 years"=brewer.pal(4,"Blues")[2],
+                        "Greater than 12 years"=brewer.pal(4,"Blues")[3],
+                        "Unknown"="grey80"))
+
+
+bar_param <- default_axis_param("column") 
+bar_param$gp$fontsize <- 16
+
+row_bar_param <- default_axis_param("row")
+row_bar_param$gp$fontsize <- 18
+
+HA_samples <- HeatmapAnnotation(
+  which = "column",
+  cbar = anno_oncoprint_barplot(axis_param=bar_param),
+  df=as.data.frame(select(dat,AMKL,`Age Category`)),
+  name="AMKL Oncoprint",
+  col=colorBars,
+  gap=unit(2.5,"mm"),
+  simple_anno_size = unit(1.0, "cm"),
+  annotation_name_gp = gpar(fontsize=20),
+  annotation_legend_param=list(title_gp=gpar(fontsize = 18),
+                               labels_gp=gpar(fontsize=12)))
+
+# HA_samples
+
+
+#colors for  the "present" abnormalities
+col = c(fusion = "dodgerblue4",
+        cytogenetics= "dodgerblue3",
+        mutation = "dodgerblue2")
+
+splits.df <- data.frame(Gene=genes) %>% 
+  mutate(Type=unlist(sapply(1:length(types), function(x) rep(paste(rep(" ", x), collapse = ""), length(types[[x]]))))) %>% 
+  select(Type)
+
+# splits.df
+```
+
+```{r fig.width=20, fig.height=8}
+linewidth=3
+op <- oncoPrint(mat=alter_list, 
+          alter_fun = list(
+            background = function(x, y, w, h) 
+              grid.rect(x, y, w, h,
+                        gp = gpar(fill = "grey90",
+                                  col="white",
+                                  lwd=linewidth)),
+                 mutation = function(x, y, w, h) 
+                    grid.rect(x, y, w, h, 
+                      gp = gpar(fill = col["mutation"],
+                                col = "white",
+                                lwd=linewidth)),
+                 fusion = function(x, y, w, h) 
+                    grid.rect(x, y, w, h, 
+                      gp = gpar(fill = col["fusion"],
+                                col = "white",
+                                lwd=linewidth)), 
+                 cytogenetics = function(x, y, w, h) 
+                    grid.rect(x, y, w, h, 
+                      gp = gpar(fill = col["cytogenetics"], 
+                                col = "white",
+                                lwd=linewidth))), 
+    col = col,
+    top_annotation = HA_samples,
+    right_annotation = rowAnnotation(rbar = anno_oncoprint_barplot(axis_param = row_bar_param)),
+    column_order = 1:ncol(alter_list$fusion),
+    # row_order = 1:nrow(alter_list$mutation),
+    left_annotation = rowAnnotation(split = anno_block(
+        gp = gpar(fill = c("dodgerblue4","dodgerblue3","dodgerblue1")),
+        labels = c("Fusions","Cytogenetics","Mutations"),
+        labels_gp = gpar(col = "white", fontsize = 15, fontface="bold"))),
+    
+    row_split = splits.df,
+    gap=unit(0.5,"cm"),
+    row_names_gp=gpar(col="black",
+                      fontsize=16,
+                      fontface="bold"),
+    pct_gp = gpar(fontsize = 22))
+
+
+# pdf("TARGET_AML_AMKL_Oncoprint_05.05.21.pdf", height = 8, width = 20)
+op
+# dev.off()
+
+
+# saveRDS(list(op,HA_samples,linewidth,col),"TARGET_AML_CEBPA_Oncoprint.RDS")
+```
+
+
+
+#Session Information
+
+```{r}
+sessionInfo()
+```
+
